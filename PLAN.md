@@ -147,6 +147,26 @@ one line on what it cannot catch.
 you asked it to do, its tool call, and the block the guardrail returned. A bare
 terminal paste with no agent turn around it does not show the boundary binding.
 
+### Recipe and boundary
+
+I chose Recipe C, filesystem lockdown, adapted to Windows by using an explicit
+deny-write ACL for my Windows account. The shipped `lockdown.sh` uses Unix
+`chmod`, so I used the operating system's native ACL enforcement instead. The
+configured trees in `guardrails/protected-trees.txt` are `accounts`, `billing`,
+and `cli`, matching the out-of-scope modules in Milestone 1. Within each tree I
+locked `src/` recursively and `pom.xml`, while leaving `target/` writable so the
+Maven gates can still run. Before locking, I saved each module's original ACL in
+`guardrails/*-acl-before-lock.txt` so it can be restored after the supervised
+task.
+
+This guardrail cannot catch an edit in an allowed module that indirectly changes
+out-of-scope behavior; the full build and diff audit are still required.
+
+### Captured block
+
+I deliberately targeted `cli/pom.xml`. The edit was rejected by the Windows
+filesystem deny-write ACL, and I verified afterward that the file was unchanged.
+The active ACL includes `SpooderMan\mihir:(DENY)(W)` on `cli/pom.xml`.
 ---
 
 ## Milestone 3: The run
