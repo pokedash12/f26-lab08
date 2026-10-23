@@ -108,6 +108,16 @@ public final class BookingRules {
      * their own bookings until the moment the booking starts.
      */
     public Optional<RejectionReason> checkCancellable(Booking booking, String requesterId) {
+        return checkChangeable(booking, requesterId);
+    }
+
+    /** May {@code requesterId} modify {@code booking} right now? */
+    public Optional<RejectionReason> checkModifiable(Booking booking, String requesterId) {
+        return checkChangeable(booking, requesterId);
+    }
+
+    /** Ownership and lifecycle checks shared by cancellation and modification. */
+    private Optional<RejectionReason> checkChangeable(Booking booking, String requesterId) {
         Objects.requireNonNull(booking, "booking");
         Objects.requireNonNull(requesterId, "requesterId");
         if (!booking.isOwnedBy(requesterId)) {

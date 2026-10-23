@@ -41,33 +41,36 @@ leaving the original booking unchanged. It must ignore the booking being edited
 in both conflict checks and waive only the active-booking-count cap. A successful
 interval change runs the existing FIFO waitlist promotion pass through
 `BookingService`; attendee-only changes do not. A no-op succeeds without a
-history entry or event. Each real change appends an immutable history entry with
-the old and new interval and attendee count plus the modification instant, and
-publishes a new `BookingModifiedEvent` carrying the same old/new details. This
-task may change domain model/result/event types, `BookingService`, and tests in
-`core-domain`; it depends on nothing.
+history entry. Each real change appends an immutable history entry with the old
+and new interval and attendee count plus the modification instant. This task may
+change domain model/result types, `BookingService`, and tests in `core-domain`;
+it depends on nothing.
 
 Checkpoint: run `mvn -B -pl core-domain -am test`. When the new
 tests pass for shorten, lengthen, move, attendee-only, and no-op changes; all
 ownership/timing/rule rejections preserve the original booking; self-exclusion
 allows a 15-minute nudge while real room and user conflicts are rejected;
 interval changes exercise FIFO promotion and its waiter-calendar re-check; and
-event publication failure does not undo a modification. The gate could remain
-green if history is stored correctly but exposed in a form the later HTTP JSON
-view cannot serialize cleanly.
+rejections perform no writes. The gate could remain green if history is stored
+correctly but exposed in a form the later HTTP JSON view cannot serialize
+cleanly.
 
 ### Task 2 — Owner modification notification
 
-Teach `notifications` to turn `BookingModifiedEvent` into an owner notification
-whose subject/body identify the booking and show both old and new interval and
-attendee details. Register the new notification kind and shipped template while
-preserving fire-and-forget behavior. This task touches only `notifications` and
-its new tests and depends on Task 1's event contract.
+Add `BookingModifiedEvent` to the `core-domain` event hierarchy and publish it
+after a real modification, carrying the old/new details already stored by Task
+1. Teach `notifications` to turn it into an owner notification whose subject/body
+identify the booking and show both old and new interval and attendee details.
+Register the new notification kind and shipped template while preserving
+fire-and-forget behavior. This task touches the event/service integration and
+tests in `core-domain` plus `notifications` and its new tests; it depends on Task
+1's modification history.
 
 Checkpoint: run `mvn -B -pl notifications -am test`. When a
 notification test publishes a modification event, observes exactly one queued
 message containing both complete old and new details, and also proves a missing
-recipient or template is recorded as skipped without an exception. The gate
+recipient or template is recorded as skipped without an exception; a core test
+also proves a publisher failure cannot undo the stored modification. The gate
 could remain green if the wording is technically complete but too ambiguous for
 a person to tell which displayed values are old and which are new.
 
@@ -80,7 +83,7 @@ Add storage serialization tests and analytics parsing/folding/utilization tests;
 do not special-case the revenue report, which must keep reading the shared
 ledger. Update the event-type lists in `AGENTS.md` and `ARCHITECTURE.md` in the
 same task as required by AGENTS.md rule 6. This task touches `storage`,
-`analytics`, those two convention files, and depends on Task 1.
+`analytics`, those two convention files, and depends on Task 2.
 
 Checkpoint: run the single combined gate
 `mvn -B -pl storage -am test; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }; Push-Location analytics; pytest; $code = $LASTEXITCODE; Pop-Location; exit $code`.
@@ -111,6 +114,16 @@ GET responses show ordered history to owner and administrator; and a freed slot
 returns its promotion. The gate could remain green if the tests call handler
 methods directly and the real router has not actually registered the PATCH
 method, so at least one test must use the HTTP test server end to end.
+
+### Plan correction after the first cold build
+
+The first Task 1 cold build showed that adding a subtype to the sealed
+`DomainEvent` hierarchy makes `notifications` fail to compile until its
+exhaustive switches handle that subtype. To keep Task 1 independently buildable
+and preserve the "exactly one task" boundary, I moved event creation/publication
+and its fire-and-forget test from Task 1 to Task 2, where the notification
+consumer is implemented in the same run. Task 1 remains modification behavior
+and history; no notification code is part of its diff.
 
 ### AGENTS.md rules 3 and 4
 
@@ -180,19 +193,87 @@ conditional statement of when you would stop the agent and write the code
 yourself. "If something looks wrong" does not count. Name the trigger and name
 what you would do.
 
+For Task 1, I will stop the agent and take over immediately if its diff creates
+a second overlap predicate instead of routing conflicts through
+`ConflictChecker`/`TimeInterval.overlaps`, or if it introduces a production
+caller of `WaitlistStore.save` or `WaitlistStore.remove` outside
+`BookingService`. I will also take over if the `core-domain` gate fails for the
+same underlying cause after two agent repair attempts. I will preserve unrelated
+and pre-existing work, isolate the violating Task 1 lines or repeatedly failing
+case, implement the smallest correction within Task 1's declared `core-domain`
+scope, add or retain a focused regression test, and rerun
+`mvn -B -pl core-domain -am test` before continuing.
+
 **The evidence.** Name the task from Milestone 1. Paste the result line of its
 gate command (run it without `-q` so the line is in the output) and the result
 line of one `mvn -B clean test` run after the task was finished. The module
 gate cannot see a cross-module compile break on a warm tree. A cold build can,
 and so can CI.
+Gate
+[INFO] Results:
+[INFO] 
+[INFO] Tests run: 177, Failures: 0, Errors: 0, Skipped: 0
 
-**The diff.** The files the agent changed, and how each one maps to that task's
-declared scope (plain `git diff` leaves out new files, but
-`git add -N . && git diff --stat` includes them). Note anything it touched that
-you did not expect, including any shipped test. Then quote the one line you
-read hardest and say what you were checking for.
+Clean test
+ Results:
+[INFO] 
+[INFO] Tests run: 31, Failures: 0, Errors: 0, Skipped: 0
 
-**The refuter.** What you gave it and what you asked it to do (paste the
-brief). Then the one finding you settled, and how (the new failing test with
-its red run, or the evidence that dismissed it). If nothing it reported held
-up, say how you checked its strongest claim.
+**The diff.**
+C:\17214\f26-lab08>git diff --stat
+ PLAN.md                                            | 54 +++++++++++++-----
+ .../cs214/campusreserve/core/domain/Booking.java   | 31 +++++++++-
+ .../campusreserve/core/policy/BookingRules.java    | 10 ++++
+ .../campusreserve/core/service/BookingService.java | 66 ++++++++++++++++++++++
+ guardrails/protected-trees.txt                     |  4 +-
+ 5 files changed, 147 insertions(+), 18 deletions(-)
+
+ "return calendar.stream().filter(booking -> !booking.id().equals(bookingId)).toList();"
+
+**The refuter.**
+"You are the independent refuter for Milestone 3.
+Review exactly one task:
+[Turn CHANGE-REQUEST.md into three or four agent-sized tasks in the
+Supervision Plan format. Every task carries a verification checkpoint, and the
+section ends with an out-of-scope list.]
+You may use only:
+1. CHANGE-REQUEST.md
+2. The supplied Task 1 diff and new-file contents
+3. The repository conventions already provided to this session
+Try to break the implementation.
+Do not propose stylistic improvements. Report only behavioral or contract
+violations.
+For every finding, provide:
+1. the exact setup and call sequence
+2. the expected result
+3. the actual result implied by the code
+4. the relevant requirement
+5. a minimal JUnit test that would demonstrate it
+Rank the findings by confidence. If you cannot find a defensible defect,
+say so and identify the strongest case you investigated."
+
+### Fresh-context refuter
+
+- Brief: The refuter received only `CHANGE-REQUEST.md`, Task 1's one-line
+  scope, and the Task 1 diff and new-file contents. It was asked to identify
+  concrete inputs or call sequences that violate the requested behavior. Prompt is above
+- Result: No defensible behavioral defect was found.
+- Strongest case investigated: Partial mutation if a waitlist or store
+  operation throws during promotion after `bookings.save(modified)`.
+- Potential concern: The modified booking is saved before
+  `promoteWaitlist`, so a later infrastructure exception would not roll back
+  the completed booking modification.
+- Resolution: Dismissed. `CHANGE-REQUEST.md` requires unchanged state for a
+  rejected modification, but does not require transactional rollback after
+  successful validation when an infrastructure operation throws. All
+  specified rejection checks occur before the first write.
+- Additional checks: The refuter found that omitted fields are preserved,
+  conflict checks exclude only the modified booking, conflicts use the shared
+  `ConflictChecker`, lifecycle rejections precede writes, interval changes
+  trigger promotion, attendee-only changes do not, history is ordered and
+  defensively copied, no-op changes do not write, and interval boundaries
+  remain governed by `TimeInterval.overlaps`.
+- Settlement evidence: The strongest claim was dismissed using the
+  change-request contract and the ordering in `modifyBooking`; no failing
+  test could be justified without adding a transactional requirement absent
+  from the request.
